@@ -1,0 +1,5 @@
+{
+  "name": "MaxiScribe - Book Page Transcription",
+  "description": "Upload book page images, transcribe them using AI, and organize them numerically into digital books.",
+  "requestFramePermissions": []
+}
