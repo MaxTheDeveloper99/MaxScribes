@@ -266,16 +266,72 @@ initDb();
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // Setup multer for image uploads (Using memory storage for Vercel/Serverless compatibility)
 const storage = multer.memoryStorage();
 const upload = multer({ 
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+  limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
 });
 
 // API Routes
+app.post("/api/transcribe", async (req, res) => {
+  const { imageBase64, mimeType } = req.body;
+  if (!imageBase64) {
+    return res.status(400).json({ error: "Missing imageBase64 in request body." });
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY || "";
+  if (!apiKey) {
+    return res.status(500).json({ error: "GEMINI_API_KEY is not configured on the server." });
+  }
+
+  try {
+    const { GoogleGenAI } = await import("@google/genai");
+    const ai = new GoogleGenAI({ apiKey });
+    const modelsToTry = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3-flash-preview"];
+    let lastError: any = null;
+
+    for (const model of modelsToTry) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: [
+            {
+              parts: [
+                {
+                  inlineData: {
+                    data: imageBase64,
+                    mimeType: mimeType || "image/jpeg",
+                  },
+                },
+                {
+                  text: "Extract all the text from this book page image. Maintain the original formatting as much as possible. If there is a page number visible, please include it at the very top as 'Page: [number]'.",
+                },
+              ],
+            },
+          ],
+        });
+
+        const text = response.text || "No text extracted.";
+        return res.json({ text, modelUsed: model });
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`Server OCR with model ${model} failed:`, err.message);
+      }
+    }
+
+    throw lastError || new Error("All AI models failed to transcribe the page.");
+  } catch (err: any) {
+    const isRateLimit = err.message?.includes("429") || 
+                        err.message?.includes("RESOURCE_EXHAUSTED") || 
+                        JSON.stringify(err).includes("429");
+    const status = isRateLimit ? 429 : 500;
+    res.status(status).json({ error: err.message || "Transcription failed" });
+  }
+});
 app.get("/api/books", async (req, res) => {
   try {
     const books = await dbGetBooks();

@@ -3,8 +3,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 import { Book, Page } from '../types';
 import { useDropzone } from 'react-dropzone';
-import { extractTextFromImage, parsePageNumber } from '../services/gemini';
-import { Upload, FileText, Loader2, Download, CheckCircle2, AlertCircle } from 'lucide-react';
+import { extractTextFromImage, parsePageNumber, sleep } from '../services/gemini';
+import { optimizeImageForOcr } from '../utils/imageOptimizer';
+import { Upload, FileText, Loader2, Download, CheckCircle2, AlertCircle, RefreshCw, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Markdown from 'react-markdown';
 
@@ -15,10 +16,18 @@ interface BookDetailProps {
   book: Book;
 }
 
+interface FailedFileItem {
+  file: File;
+  error: string;
+}
+
 export default function BookDetail({ book }: BookDetailProps) {
   const queryClient = useQueryClient();
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string>('');
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number; fileName: string } | null>(null);
+  const [failedFiles, setFailedFiles] = useState<FailedFileItem[]>([]);
+  const [notification, setNotification] = useState<{ type: 'success' | 'warning' | 'error'; message: string } | null>(null);
 
   const { data: pages, isLoading } = useQuery<Page[]>({
     queryKey: ['pages', book.id],
@@ -42,87 +51,122 @@ export default function BookDetail({ book }: BookDetailProps) {
     },
   });
 
-  const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    console.log('Files dropped:', acceptedFiles);
+  const processFiles = useCallback(async (filesToProcess: File[]) => {
+    if (!filesToProcess || filesToProcess.length === 0) return;
+
     setIsUploading(true);
-    
+    setNotification(null);
+    const currentFailed: FailedFileItem[] = [];
+    let successCount = 0;
+
     // Calculate the starting page number based on existing pages
-    let nextPageNumber = (pages?.length ? Math.max(...pages.map(p => p.page_number)) + 1 : 1);
+    let nextPageNumber = pages?.length ? Math.max(...pages.map(p => p.page_number)) + 1 : 1;
 
-    for (const file of acceptedFiles) {
+    for (let i = 0; i < filesToProcess.length; i++) {
+      const file = filesToProcess[i];
+      setUploadProgress({
+        current: i + 1,
+        total: filesToProcess.length,
+        fileName: file.name,
+      });
+
       try {
-        setUploadStatus(`Processing ${file.name}...`);
-        console.log(`Processing ${file.name}, size: ${file.size} bytes`);
+        setUploadStatus(`Optimizing image: ${file.name}...`);
         
-        // Convert to base64 for Gemini
-        const reader = new FileReader();
-        const base64Promise = new Promise<string>((resolve, reject) => {
-          reader.onload = () => {
-            const result = reader.result as string;
-            if (!result) return reject(new Error("File is empty or could not be read."));
-            const base64 = result.split(',')[1];
-            if (!base64) return reject(new Error("Invalid image data format."));
-            resolve(base64);
-          };
-          reader.onerror = () => {
-            const errorMsg = reader.error?.message || "Unknown disk error";
-            reject(new Error(`Browser could not read file: ${errorMsg}. Try closing other apps or downloading the file to your device first.`));
-          };
-          reader.onabort = () => reject(new Error("File read was aborted."));
-        });
-        
-        if (file.size === 0) throw new Error("The selected file is empty (0 bytes).");
-        
-        reader.readAsDataURL(file);
-        const base64 = await base64Promise;
-        console.log('Base64 conversion complete');
+        // 1. Optimize image (resizes down to 1600px & converts to crisp 85% JPEG to prevent rate & token exhaustion)
+        const { base64Data, mimeType, optimizedFile } = await optimizeImageForOcr(file, 1600);
 
-        // Extract text using Gemini
-        console.log('Calling Gemini API...');
-        const text = await extractTextFromImage(base64, file.type);
-        console.log('Gemini response received');
-        
-        if (!text || text === "No text extracted.") {
-          throw new Error("Gemini failed to extract text. Please check your API key.");
+        setUploadStatus(`Transcribing ${file.name} with AI...`);
+
+        // 2. Extract text using AI with automatic rate-limit countdown and fallback
+        const text = await extractTextFromImage(base64Data, mimeType, (statusUpdate) => {
+          setUploadStatus(statusUpdate);
+        });
+
+        if (!text || text.trim() === "No text extracted.") {
+          throw new Error("AI could not extract text from this page. Please ensure the image is clear.");
         }
 
-        // Try to find page number in text, otherwise use our sequential counter
+        // 3. Try to find page number in text, otherwise use our sequential counter
         const detectedPageNumberFromText = parsePageNumber(text);
         const finalPageNumber = detectedPageNumberFromText !== null ? detectedPageNumberFromText : nextPageNumber;
-        
-        // Update our counter for the next file in this batch
         nextPageNumber = Math.max(nextPageNumber, finalPageNumber + 1);
 
-        // Upload to backend
+        setUploadStatus(`Saving page ${finalPageNumber}...`);
+
+        // 4. Upload to backend
         await uploadPageMutation.mutateAsync({
-          file,
+          file: optimizedFile,
           content: text,
           pageNumber: finalPageNumber,
         });
 
-        setUploadStatus(`Successfully processed ${file.name}`);
-        
-        // Add a small delay between files to avoid hitting rate limits (1 second)
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      } catch (error: any) {
-        console.error('Error processing file:', error);
-        let errorMessage = error.response?.data?.error || error.message;
-        
-        if (errorMessage.includes("429") || errorMessage.includes("RESOURCE_EXHAUSTED")) {
-          errorMessage = "The AI is currently busy (Rate Limit). Please wait a minute and try uploading the remaining images in smaller batches.";
+        successCount++;
+        setUploadStatus(`Saved page ${finalPageNumber} (${file.name})`);
+
+        // Pacing: add a polite 2.5s delay between images to stay well within free-tier quota limits
+        if (i < filesToProcess.length - 1) {
+          setUploadStatus(`Page ${finalPageNumber} saved. Pacing next page in 2s...`);
+          await sleep(2000);
         }
+      } catch (error: any) {
+        console.error(`Error processing file ${file.name}:`, error);
+        let errorMsg = error.response?.data?.error || error.message || "Unknown processing error";
         
-        alert(`Error processing ${file.name}: ${errorMessage}`);
-        setUploadStatus(`Error: ${errorMessage}`);
+        if (errorMsg.includes("429") || errorMsg.includes("RESOURCE_EXHAUSTED")) {
+          errorMsg = "AI rate limit reached. The system paused, but quota remained exhausted.";
+        }
+
+        currentFailed.push({
+          file,
+          error: errorMsg,
+        });
+
+        // Briefly wait so subsequent images don't fail simultaneously
+        if (i < filesToProcess.length - 1) {
+          setUploadStatus(`Encountered issue with ${file.name}. Pausing before next page...`);
+          await sleep(4000);
+        }
       }
     }
+
     setIsUploading(false);
+    setUploadProgress(null);
     setUploadStatus('');
+    setFailedFiles(currentFailed);
+
+    if (currentFailed.length === 0) {
+      setNotification({
+        type: 'success',
+        message: `Successfully transcribed and added all ${successCount} pages!`,
+      });
+    } else if (successCount > 0) {
+      setNotification({
+        type: 'warning',
+        message: `Processed ${successCount} of ${filesToProcess.length} pages. ${currentFailed.length} page(s) could not be completed.`,
+      });
+    } else {
+      setNotification({
+        type: 'error',
+        message: `Could not transcribe the pages. Please check your network connection and API key.`,
+      });
+    }
   }, [book.id, pages, uploadPageMutation]);
+
+  const onDrop = useCallback((acceptedFiles: File[]) => {
+    processFiles(acceptedFiles);
+  }, [processFiles]);
+
+  const retryFailedFiles = () => {
+    const filesToRetry = failedFiles.map(f => f.file);
+    setFailedFiles([]);
+    processFiles(filesToRetry);
+  };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: { 'image/*': [] },
+    disabled: isUploading,
   });
 
   const downloadFullText = async () => {
@@ -135,10 +179,9 @@ export default function BookDetail({ book }: BookDetailProps) {
         {
           properties: {},
           children: sortedPages.flatMap(p => {
-            // Clean content: remove markdown bold (**) and blockquote (>)
-            const cleanContent = p.content
-              .replace(/\*\*(.*?)\*\*/g, '$1') // Remove **bold**
-              .replace(/^>\s*/gm, ''); // Remove > at start of lines
+            const cleanContent = (p.content || "")
+              .replace(/\*\*(.*?)\*\*/g, '$1')
+              .replace(/^>\s*/gm, '');
 
             return [
               new Paragraph({
@@ -159,16 +202,17 @@ export default function BookDetail({ book }: BookDetailProps) {
                   }),
                 ],
               }),
-              ...cleanContent.split('\n').map(line => 
-                new Paragraph({
-                  children: [
-                    new TextRun({
-                      text: line,
-                      size: 22,
-                      font: "Times New Roman"
-                    }),
-                  ],
-                })
+              ...cleanContent.split('\n\n').map(
+                para =>
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: para.trim(),
+                        font: "Times New Roman",
+                        size: 24,
+                      }),
+                    ],
+                  })
               ),
               new Paragraph({
                 children: [
@@ -189,6 +233,7 @@ export default function BookDetail({ book }: BookDetailProps) {
 
   return (
     <div className="space-y-8 sm:space-y-12">
+      {/* Header Info */}
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
         <div className="min-w-0">
           <div className="flex items-center gap-3 mb-2">
@@ -211,13 +256,75 @@ export default function BookDetail({ book }: BookDetailProps) {
         </button>
       </div>
 
-      {/* Upload Area */}
+      {/* Notification Banner */}
+      <AnimatePresence>
+        {notification && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className={`p-4 rounded-2xl flex items-center justify-between gap-4 ${
+              notification.type === 'success'
+                ? 'bg-emerald-50 text-emerald-900 border border-emerald-200'
+                : notification.type === 'warning'
+                ? 'bg-amber-50 text-amber-900 border border-amber-200'
+                : 'bg-rose-50 text-rose-900 border border-rose-200'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              {notification.type === 'success' ? (
+                <CheckCircle2 className="text-emerald-600 shrink-0" size={20} />
+              ) : (
+                <AlertCircle className={notification.type === 'warning' ? "text-amber-600 shrink-0" : "text-rose-600 shrink-0"} size={20} />
+              )}
+              <span className="text-sm font-sans font-medium">{notification.message}</span>
+            </div>
+            <button
+              onClick={() => setNotification(null)}
+              className="text-stone-400 hover:text-stone-700 transition-colors p-1"
+            >
+              <X size={16} />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Failed Items Banner with Retry Option */}
+      {failedFiles.length > 0 && !isUploading && (
+        <div className="p-5 rounded-2xl bg-amber-50/80 border border-amber-200/80 text-amber-950 font-sans space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-2">
+              <AlertCircle size={18} className="text-amber-600" />
+              <span className="font-semibold text-sm">
+                {failedFiles.length} page{failedFiles.length > 1 ? 's' : ''} encountered an issue during transcription
+              </span>
+            </div>
+            <button
+              onClick={retryFailedFiles}
+              className="flex items-center gap-2 bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-full text-xs font-bold transition-all shadow-sm"
+            >
+              <RefreshCw size={14} />
+              Retry {failedFiles.length} Failed Page{failedFiles.length > 1 ? 's' : ''}
+            </button>
+          </div>
+          <div className="text-xs text-amber-900/80 space-y-1">
+            {failedFiles.map((item, idx) => (
+              <div key={idx} className="flex items-center gap-2">
+                <span className="font-mono font-medium">• {item.file.name}:</span>
+                <span className="italic">{item.error}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Upload Dropzone & Progress Area */}
       <div 
         {...getRootProps()} 
         className={`
-          relative overflow-hidden border-2 border-dashed rounded-3xl p-6 sm:p-12 text-center transition-all cursor-pointer
+          relative overflow-hidden border-2 border-dashed rounded-3xl p-6 sm:p-10 text-center transition-all
           ${isDragActive ? 'border-[#5A5A40] bg-[#5A5A40]/5 scale-[1.01]' : 'border-[#5A5A40]/20 bg-white hover:border-[#5A5A40]/40'}
-          ${isUploading ? 'pointer-events-none opacity-80' : ''}
+          ${isUploading ? 'cursor-default pointer-events-none' : 'cursor-pointer'}
         `}
       >
         <input {...getInputProps()} />
@@ -225,23 +332,37 @@ export default function BookDetail({ book }: BookDetailProps) {
           <div className={`w-12 h-12 sm:w-16 sm:h-16 rounded-2xl flex items-center justify-center transition-colors ${isDragActive ? 'bg-[#5A5A40] text-white' : 'bg-[#F5F5F0] text-[#5A5A40]'}`}>
             {isUploading ? <Loader2 className="animate-spin" size={24} /> : <Upload size={24} />}
           </div>
-          <div>
+          
+          <div className="max-w-md mx-auto">
             <p className="text-lg sm:text-xl font-bold text-[#1A1A1A]">
-              {isUploading ? 'Processing Pages...' : 'Drop book page images here'}
+              {isUploading ? 'Transcribing Pages...' : 'Drop book page images here'}
             </p>
-            <p className="text-sm sm:text-base text-[#5A5A40]/60 font-sans mt-1">
-              {isUploading ? uploadStatus : 'or click to browse files (JPG, PNG)'}
-            </p>
+            
+            {isUploading && uploadProgress ? (
+              <div className="mt-2 space-y-2">
+                <p className="text-xs sm:text-sm font-sans font-semibold text-[#5A5A40]">
+                  Page {uploadProgress.current} of {uploadProgress.total} &bull; {uploadProgress.fileName}
+                </p>
+                <p className="text-xs text-[#5A5A40]/80 font-sans italic">
+                  {uploadStatus || 'Processing with Gemini AI...'}
+                </p>
+                {/* Progress bar */}
+                <div className="w-full bg-[#5A5A40]/10 rounded-full h-2 overflow-hidden mt-3">
+                  <motion.div
+                    className="bg-[#5A5A40] h-full rounded-full transition-all duration-300"
+                    style={{
+                      width: `${Math.round((uploadProgress.current / uploadProgress.total) * 100)}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm sm:text-base text-[#5A5A40]/60 font-sans mt-1">
+                Drag &amp; drop multiple images or click to select (auto-optimized &amp; ordered)
+              </p>
+            )}
           </div>
         </div>
-        
-        {isUploading && (
-          <motion.div 
-            initial={{ width: 0 }}
-            animate={{ width: '100%' }}
-            className="absolute bottom-0 left-0 h-1 bg-[#5A5A40]"
-          />
-        )}
       </div>
 
       {/* Pages List */}
@@ -272,13 +393,13 @@ export default function BookDetail({ book }: BookDetailProps) {
                   key={page.id}
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.1 }}
+                  transition={{ delay: index * 0.05 }}
                   className="grid grid-cols-1 lg:grid-cols-2 gap-8 group"
                 >
                   {/* Image Preview */}
                   <div className="relative aspect-[3/4] bg-white rounded-2xl overflow-hidden shadow-md border border-[#5A5A40]/10">
                     <img 
-                      src={page.image_data} 
+                      src={page.image_data || undefined} 
                       alt={`Page ${page.page_number}`} 
                       className="w-full h-full object-contain"
                       referrerPolicy="no-referrer"

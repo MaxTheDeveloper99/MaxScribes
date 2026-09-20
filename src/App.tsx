@@ -13,7 +13,7 @@ export default function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="min-h-screen bg-[#F5F5F0] text-[#1A1A1A] font-serif">
+      <div className="min-h-screen flex flex-col bg-[#F5F5F0] text-[#1A1A1A] font-serif">
         {/* Header */}
         <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-[#5A5A40]/10 px-6 py-4">
           <div className="max-w-5xl mx-auto flex items-center justify-between">
@@ -41,7 +41,7 @@ export default function App() {
         </header>
 
         {/* Main Content */}
-        <main className="max-w-5xl mx-auto px-6 py-12">
+        <main className="flex-1 w-full max-w-5xl mx-auto px-6 py-12">
           <AnimatePresence mode="wait">
             {!selectedBook ? (
               <motion.div
@@ -68,7 +68,7 @@ export default function App() {
         </main>
 
         {/* Footer */}
-        <footer className="mt-20 border-t border-[#5A5A40]/10 py-12 px-6 bg-white/50">
+        <footer className="mt-auto border-t border-[#5A5A40]/10 py-10 px-6 bg-white/50">
           <div className="max-w-5xl mx-auto text-center">
             <p className="text-sm text-[#5A5A40]/60 font-sans">
               &copy; 2026 MaxiScribe. Powered by Gemini AI for high-fidelity transcription.
