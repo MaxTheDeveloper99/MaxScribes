@@ -1,6 +1,6 @@
-# LibrisScribe - Book Page Transcription & Ordering
+# MaxiScribe - Book Page Transcription & Ordering
 
-LibrisScribe is a full-stack application designed to digitize physical books by transcribing page images into structured, ordered text.
+MaxiScribe is a full-stack application designed to digitize physical books by transcribing page images into structured, ordered text.
 
 ## Features
 

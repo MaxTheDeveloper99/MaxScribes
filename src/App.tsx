@@ -71,7 +71,7 @@ export default function App() {
         <footer className="mt-20 border-t border-[#5A5A40]/10 py-12 px-6 bg-white/50">
           <div className="max-w-5xl mx-auto text-center">
             <p className="text-sm text-[#5A5A40]/60 font-sans">
-              &copy; 2026 LibrisScribe. Powered by Gemini AI for high-fidelity transcription.
+              &copy; 2026 MaxiScribe. Powered by Gemini AI for high-fidelity transcription.
             </p>
           </div>
         </footer>
