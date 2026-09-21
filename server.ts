@@ -291,10 +291,12 @@ app.post("/api/transcribe", async (req, res) => {
   try {
     const { GoogleGenAI } = await import("@google/genai");
     const ai = new GoogleGenAI({ apiKey });
-    const modelsToTry = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3-flash-preview"];
+    // Prioritize gemini-3.6-flash which has superior stability and avoids the 503 spikes on gemini-3.8-flash
+    const modelsToTry = ["gemini-3.6-flash", "gemini-3-flash-preview", "gemini-3.8-flash"];
     let lastError: any = null;
 
-    for (const model of modelsToTry) {
+    for (let idx = 0; idx < modelsToTry.length; idx++) {
+      const model = modelsToTry[idx];
       try {
         const response = await ai.models.generateContent({
           model,
@@ -308,28 +310,51 @@ app.post("/api/transcribe", async (req, res) => {
                   },
                 },
                 {
-                  text: "Extract all the text from this book page image. Maintain the original formatting as much as possible. If there is a page number visible, please include it at the very top as 'Page: [number]'.",
+                  text: "Extract all the text from this book page or handwritten notes image. Maintain the original formatting as much as possible. If there is a page number visible, please include it at the very top as 'Page: [number]'. If no page number is visible, do not guess or add one.",
                 },
               ],
             },
           ],
         });
 
-        const text = response.text || "No text extracted.";
+        const text = response.text || "";
         return res.json({ text, modelUsed: model });
       } catch (err: any) {
         lastError = err;
-        console.warn(`Server OCR with model ${model} failed:`, err.message);
+        console.warn(`Server OCR with model ${model} failed (status: ${err.status}):`, err.message);
+
+        // If there are more models to try, wait briefly (1.5s) to allow brief spikes to settle
+        if (idx < modelsToTry.length - 1) {
+          await new Promise((r) => setTimeout(r, 1500));
+        }
       }
     }
 
     throw lastError || new Error("All AI models failed to transcribe the page.");
   } catch (err: any) {
-    const isRateLimit = err.message?.includes("429") || 
-                        err.message?.includes("RESOURCE_EXHAUSTED") || 
-                        JSON.stringify(err).includes("429");
-    const status = isRateLimit ? 429 : 500;
-    res.status(status).json({ error: err.message || "Transcription failed" });
+    const errorString = JSON.stringify(err) + " " + (err.message || "");
+    const isTransient =
+      err.status === 503 ||
+      err.status === 429 ||
+      errorString.includes("429") ||
+      errorString.includes("503") ||
+      errorString.includes("RESOURCE_EXHAUSTED") ||
+      errorString.includes("high demand") ||
+      errorString.includes("UNAVAILABLE");
+
+    // Attempt to extract delay in seconds from the error payload if specified by Google
+    let retryAfterSeconds = 25;
+    const match = errorString.match(/retry in ([\d\.]+)s/i) || errorString.match(/retryDelay":"(\d+)s"/i);
+    if (match && match[1]) {
+      retryAfterSeconds = Math.min(Math.max(Math.ceil(parseFloat(match[1])), 10), 60);
+    }
+
+    const status = isTransient ? 429 : 500;
+    res.status(status).json({
+      error: err.message || "Transcription failed",
+      isTransient,
+      retryAfterSeconds,
+    });
   }
 });
 app.get("/api/books", async (req, res) => {

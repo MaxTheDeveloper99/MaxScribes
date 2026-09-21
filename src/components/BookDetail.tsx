@@ -83,12 +83,10 @@ export default function BookDetail({ book }: BookDetailProps) {
           setUploadStatus(statusUpdate);
         });
 
-        if (!text || text.trim() === "No text extracted.") {
-          throw new Error("AI could not extract text from this page. Please ensure the image is clear.");
-        }
+        const finalText = text && text.trim() ? text.trim() : "[No legible text detected on this page]";
 
         // 3. Try to find page number in text, otherwise use our sequential counter
-        const detectedPageNumberFromText = parsePageNumber(text);
+        const detectedPageNumberFromText = parsePageNumber(finalText);
         const finalPageNumber = detectedPageNumberFromText !== null ? detectedPageNumberFromText : nextPageNumber;
         nextPageNumber = Math.max(nextPageNumber, finalPageNumber + 1);
 
@@ -97,7 +95,7 @@ export default function BookDetail({ book }: BookDetailProps) {
         // 4. Upload to backend
         await uploadPageMutation.mutateAsync({
           file: optimizedFile,
-          content: text,
+          content: finalText,
           pageNumber: finalPageNumber,
         });
 
@@ -106,27 +104,35 @@ export default function BookDetail({ book }: BookDetailProps) {
 
         // Pacing: add a polite 2.5s delay between images to stay well within free-tier quota limits
         if (i < filesToProcess.length - 1) {
-          setUploadStatus(`Page ${finalPageNumber} saved. Pacing next page in 2s...`);
-          await sleep(2000);
+          setUploadStatus(`Page ${finalPageNumber} saved. Preparing next page in 2.5s...`);
+          await sleep(2500);
         }
       } catch (error: any) {
         console.error(`Error processing file ${file.name}:`, error);
         let errorMsg = error.response?.data?.error || error.message || "Unknown processing error";
         
-        if (errorMsg.includes("429") || errorMsg.includes("RESOURCE_EXHAUSTED")) {
-          errorMsg = "AI rate limit reached. The system paused, but quota remained exhausted.";
+        const isTransient =
+          errorMsg.includes("429") ||
+          errorMsg.includes("503") ||
+          errorMsg.includes("RESOURCE_EXHAUSTED") ||
+          errorMsg.includes("high demand") ||
+          errorMsg.includes("UNAVAILABLE");
+
+        if (isTransient) {
+          errorMsg = "AI service temporarily busy (Rate limit / High demand).";
+          if (i < filesToProcess.length - 1) {
+            setUploadStatus(`Encountered service limit on ${file.name}. Pausing for 15s before next page...`);
+            await sleep(15000);
+          }
+        } else if (i < filesToProcess.length - 1) {
+          setUploadStatus(`Encountered issue with ${file.name}. Pausing before next page...`);
+          await sleep(4000);
         }
 
         currentFailed.push({
           file,
           error: errorMsg,
         });
-
-        // Briefly wait so subsequent images don't fail simultaneously
-        if (i < filesToProcess.length - 1) {
-          setUploadStatus(`Encountered issue with ${file.name}. Pausing before next page...`);
-          await sleep(4000);
-        }
       }
     }
 
@@ -154,7 +160,11 @@ export default function BookDetail({ book }: BookDetailProps) {
   }, [book.id, pages, uploadPageMutation]);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
-    processFiles(acceptedFiles);
+    // Naturally sort files by filename (e.g. page_1, page_2, page_10)
+    const sorted = [...acceptedFiles].sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+    );
+    processFiles(sorted);
   }, [processFiles]);
 
   const retryFailedFiles = () => {
