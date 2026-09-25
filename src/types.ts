@@ -3,7 +3,7 @@ export interface Book {
   title: string;
   author: string;
   status: string;
-  due_date: string;
+  due_date?: string;
   created_at: string;
 }
 

@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import { Pool } from "pg";
 import multer from "multer";
+import { cleanTranscribedText } from "./src/utils/textCleaner";
 
 // PostgreSQL connection pool
 const connectionString = (process.env.DATABASE_URL || "").trim();
@@ -213,6 +214,21 @@ async function dbUpdatePage(id: string, content?: string, page_number?: number):
   return true;
 }
 
+async function dbDeletePage(id: string): Promise<boolean> {
+  const dbValidationError = getDbUrlValidationError();
+  if (!dbValidationError) {
+    try {
+      await pool.query("DELETE FROM pages WHERE id = $1", [id]);
+      return true;
+    } catch (err: any) {
+      console.warn("Postgres delete page failed, falling back to in-memory store:", err.message);
+    }
+  }
+  const numId = Number(id);
+  inMemoryPages = inMemoryPages.filter(p => p.id !== numId);
+  return true;
+}
+
 // Initialize database tables
 const initDb = async () => {
   const dbValidationError = getDbUrlValidationError();
@@ -310,14 +326,22 @@ app.post("/api/transcribe", async (req, res) => {
                   },
                 },
                 {
-                  text: "Extract all the text from this book page or handwritten notes image. Maintain the original formatting as much as possible. If there is a page number visible, please include it at the very top as 'Page: [number]'. If no page number is visible, do not guess or add one.",
+                  text: `Extract all the text from this page or handwritten note image. Transcribe the text exactly as written in natural handwriting using plain text only.
+
+CRITICAL INSTRUCTIONS:
+- NEVER use HTML or XML tags (do NOT output <sup>, </sup>, <sub>, </sub>, <u>, </u>, <br>, <p>, etc.).
+- Never use LaTeX or math notation (do NOT output \$\^\{...\} or \$...\$).
+- Write out chapter and verse references as standard plain text (for example, write 'Isa 51:1-2, 44:3' or 'Jer 15:16' instead of using <sup> tags).
+- If words or abbreviations are underlined in the note (like 'd' for 'the'), write the plain letters without <u> tags.
+- If there is a page number visible, include it at the very top as 'Page: [number]'. If no page number is visible, do not guess or add one.`,
                 },
               ],
             },
           ],
         });
 
-        const text = response.text || "";
+        const rawText = response.text || "";
+        const text = cleanTranscribedText(rawText);
         return res.json({ text, modelUsed: model });
       } catch (err: any) {
         lastError = err;
@@ -415,7 +439,8 @@ app.post("/api/books/:id/pages", upload.single("image"), async (req, res) => {
   }
 
   try {
-    const page = await dbCreatePage(book_id, Number(page_number), content, image_data);
+    const cleanedContent = cleanTranscribedText(content || "");
+    const page = await dbCreatePage(book_id, Number(page_number), cleanedContent, image_data);
     res.json(page);
   } catch (err: any) {
     console.error("Error creating page:", err);
@@ -426,10 +451,20 @@ app.post("/api/books/:id/pages", upload.single("image"), async (req, res) => {
 app.patch("/api/pages/:id", async (req, res) => {
   const { content, page_number } = req.body;
   try {
-    await dbUpdatePage(req.params.id, content, page_number);
+    const cleanedContent = content !== undefined ? cleanTranscribedText(content) : undefined;
+    await dbUpdatePage(req.params.id, cleanedContent, page_number);
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: `Failed to update page: ${err.message}` });
+  }
+});
+
+app.delete("/api/pages/:id", async (req, res) => {
+  try {
+    await dbDeletePage(req.params.id);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: `Failed to delete page: ${err.message}` });
   }
 });
 

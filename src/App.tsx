@@ -3,76 +3,91 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import BookList from './components/BookList';
 import BookDetail from './components/BookDetail';
 import { Book } from './types';
-import { BookOpen, ChevronLeft } from 'lucide-react';
+import { ChevronLeft } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+});
 
 export default function App() {
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
 
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="min-h-screen flex flex-col bg-[#F5F5F0] text-[#1A1A1A] font-serif">
-        {/* Header */}
-        <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-[#5A5A40]/10 px-6 py-4">
-          <div className="max-w-5xl mx-auto flex items-center justify-between">
+      <div className="min-h-screen flex flex-col bg-[#FAF8F5] text-[#1C1917] selection:bg-[#E8DFD3]">
+        {/* Clean, Human Top Navigation Bar */}
+        <header className="sticky top-0 z-40 bg-[#FAF8F5]/90 backdrop-blur-md border-b border-[#E7E2D8] px-4 sm:px-8">
+          <div className="max-w-6xl mx-auto h-16 flex items-center justify-between gap-4">
+            {/* Logo / Brand Name: Pure typography without black box icon or AI tags */}
             <div 
-              className="flex items-center gap-3 cursor-pointer group"
+              className="cursor-pointer"
               onClick={() => setSelectedBook(null)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter') setSelectedBook(null); }}
             >
-              <div className="w-10 h-10 rounded-full bg-[#5A5A40] flex items-center justify-center text-white shadow-lg group-hover:scale-110 transition-transform">
-                <BookOpen size={20} />
-              </div>
-              <h1 className="text-xl sm:text-2xl font-bold tracking-tight">MaxiScribe</h1>
+              <span className="font-serif text-2xl font-bold tracking-tight text-[#1C1917]">
+                MaxiScribe
+              </span>
             </div>
-            
-            {selectedBook && (
-              <button 
-                onClick={() => setSelectedBook(null)}
-                className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm font-sans font-medium text-[#5A5A40] hover:text-[#3A3A2A] transition-colors"
-              >
-                <ChevronLeft size={16} />
-                <span className="hidden xs:inline">Back to Library</span>
-                <span className="xs:hidden">Back</span>
-              </button>
-            )}
+
+            {/* Right Action / Context */}
+            <div>
+              {selectedBook && (
+                <button
+                  onClick={() => setSelectedBook(null)}
+                  className="flex items-center gap-1.5 text-xs sm:text-sm font-medium text-[#6E6659] hover:text-[#1C1917] transition-colors py-1 cursor-pointer"
+                >
+                  <ChevronLeft size={16} />
+                  <span>Back to Library</span>
+                </button>
+              )}
+            </div>
           </div>
         </header>
 
-        {/* Main Content */}
-        <main className="flex-1 w-full max-w-5xl mx-auto px-6 py-12">
+        {/* Main Content Area */}
+        <main className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10">
           <AnimatePresence mode="wait">
             {!selectedBook ? (
               <motion.div
                 key="list"
-                initial={{ opacity: 0, y: 20 }}
+                initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                transition={{ duration: 0.4 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
               >
                 <BookList onSelectBook={setSelectedBook} />
               </motion.div>
             ) : (
               <motion.div
-                key="detail"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                transition={{ duration: 0.4 }}
+                key={`detail-${selectedBook.id}`}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
               >
-                <BookDetail book={selectedBook} />
+                <BookDetail 
+                  book={selectedBook} 
+                  onBack={() => setSelectedBook(null)}
+                  onUpdateBook={(updated) => setSelectedBook(updated)}
+                />
               </motion.div>
             )}
           </AnimatePresence>
         </main>
 
-        {/* Footer */}
-        <footer className="mt-auto border-t border-[#5A5A40]/10 py-10 px-6 bg-white/50">
-          <div className="max-w-5xl mx-auto text-center">
-            <p className="text-sm text-[#5A5A40]/60 font-sans">
-              &copy; 2026 MaxiScribe. Powered by Gemini AI for high-fidelity transcription.
-            </p>
+        {/* Clean, Simple Footer: Terminates page flow cleanly without trailing space */}
+        <footer className="mt-auto border-t border-[#E7E2D8] bg-[#FAF8F5] py-6 px-4 sm:px-8">
+          <div className="max-w-6xl mx-auto flex items-center justify-between text-xs text-[#8C8275]">
+            <span className="font-serif font-semibold text-[#1C1917]">MaxiScribe</span>
+            <span>&copy; {new Date().getFullYear()}</span>
           </div>
         </footer>
       </div>

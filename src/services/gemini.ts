@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 import { GoogleGenAI } from "@google/genai";
 import api from "./api";
+import { cleanTranscribedText } from "../utils/textCleaner";
 
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
 const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
@@ -37,7 +38,7 @@ export async function extractTextFromImage(
     );
 
     if (res.data?.text !== undefined && res.data?.text !== null) {
-      return res.data.text;
+      return cleanTranscribedText(res.data.text);
     }
   } catch (serverErr: any) {
     const status = serverErr.response?.status;
@@ -91,7 +92,14 @@ export async function extractTextFromImage(
                   },
                 },
                 {
-                  text: "Extract all the text from this book page or handwritten notes image. Maintain the original formatting as much as possible. If there is a page number visible, please include it at the very top as 'Page: [number]'. If no page number is visible, do not guess or add one.",
+                  text: `Extract all the text from this page or handwritten note image. Transcribe the text exactly as written in natural handwriting using plain text only.
+
+CRITICAL INSTRUCTIONS:
+- NEVER use HTML or XML tags (do NOT output <sup>, </sup>, <sub>, </sub>, <u>, </u>, <br>, <p>, etc.).
+- Never use LaTeX or math notation (do NOT output \$\^\{...\} or \$...\$).
+- Write out chapter and verse references as standard plain text (for example, write 'Isa 51:1-2, 44:3' or 'Jer 15:16' instead of using <sup> tags).
+- If words or abbreviations are underlined in the note (like 'd' for 'the'), write the plain letters without <u> tags.
+- If there is a page number visible, include it at the very top as 'Page: [number]'. If no page number is visible, do not guess or add one.`,
                 },
               ],
             },
@@ -99,7 +107,7 @@ export async function extractTextFromImage(
         });
 
         if (response.text !== undefined && response.text !== null) {
-          return response.text;
+          return cleanTranscribedText(response.text);
         }
       } catch (err: any) {
         lastClientError = err;
