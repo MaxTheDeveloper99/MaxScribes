@@ -66,13 +66,29 @@ export default function BookList({ onSelectBook }: BookListProps) {
     }
   });
 
+  const formatDisplayDate = (dateStr?: string) => {
+    if (!dateStr) return '';
+    try {
+      const normalized = typeof dateStr === 'string' && dateStr.includes(' ') && !dateStr.includes('T')
+        ? dateStr.replace(' ', 'T')
+        : dateStr;
+      const d = new Date(normalized);
+      if (isNaN(d.getTime())) return '';
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    } catch (e) {
+      return '';
+    }
+  };
+
   const filteredBooks = useMemo(() => {
-    if (!books) return [];
+    if (!books || !Array.isArray(books)) return [];
     return books.filter((book) => {
-      const matchesSearch = 
-        book.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (book.author && book.author.toLowerCase().includes(searchQuery.toLowerCase()));
-      const matchesStatus = statusFilter === 'all' || book.status === statusFilter;
+      if (!book) return false;
+      const title = (book.title || '').toLowerCase();
+      const author = (book.author || '').toLowerCase();
+      const q = (searchQuery || '').toLowerCase();
+      const matchesSearch = title.includes(q) || author.includes(q);
+      const matchesStatus = statusFilter === 'all' || (book.status || 'active') === statusFilter;
       return matchesSearch && matchesStatus;
     });
   }, [books, searchQuery, statusFilter]);
@@ -368,7 +384,7 @@ export default function BookList({ onSelectBook }: BookListProps) {
               {/* Card Footer */}
               <div className="mt-6 pt-4 border-t border-[#F0EBE1] flex items-center justify-between text-xs text-[#8C8275]">
                 <div>
-                  <span>Created {new Date(book.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                  <span>{book.created_at ? `Created ${formatDisplayDate(book.created_at)}` : ''}</span>
                 </div>
 
                 <span className="text-[#1C1917] group-hover:translate-x-0.5 transition-transform flex items-center gap-1 font-medium text-xs">

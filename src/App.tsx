@@ -4,7 +4,6 @@ import BookList from './components/BookList';
 import BookDetail from './components/BookDetail';
 import { Book } from './types';
 import { ChevronLeft } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -54,33 +53,15 @@ export default function App() {
 
         {/* Main Content Area */}
         <main className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10">
-          <AnimatePresence mode="wait">
-            {!selectedBook ? (
-              <motion.div
-                key="list"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2 }}
-              >
-                <BookList onSelectBook={setSelectedBook} />
-              </motion.div>
-            ) : (
-              <motion.div
-                key={`detail-${selectedBook.id}`}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2 }}
-              >
-                <BookDetail 
-                  book={selectedBook} 
-                  onBack={() => setSelectedBook(null)}
-                  onUpdateBook={(updated) => setSelectedBook(updated)}
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
+          {!selectedBook ? (
+            <BookList onSelectBook={setSelectedBook} />
+          ) : (
+            <BookDetail 
+              book={selectedBook} 
+              onBack={() => setSelectedBook(null)}
+              onUpdateBook={(updated) => setSelectedBook(updated)}
+            />
+          )}
         </main>
 
         {/* Clean, Simple Footer: Terminates page flow cleanly without trailing space */}

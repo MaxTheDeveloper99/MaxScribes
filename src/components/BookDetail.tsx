@@ -119,6 +119,20 @@ export default function BookDetail({ book, onBack, onUpdateBook }: BookDetailPro
     }
   });
 
+  const formatDisplayDate = (dateStr?: string) => {
+    if (!dateStr) return '';
+    try {
+      const normalized = typeof dateStr === 'string' && dateStr.includes(' ') && !dateStr.includes('T')
+        ? dateStr.replace(' ', 'T')
+        : dateStr;
+      const d = new Date(normalized);
+      if (isNaN(d.getTime())) return '';
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    } catch (e) {
+      return '';
+    }
+  };
+
   const stats = useMemo(() => {
     if (!pages || pages.length === 0) return { totalPages: 0, totalWords: 0 };
     const totalWords = pages.reduce((acc, p) => {
@@ -579,7 +593,7 @@ export default function BookDetail({ book, onBack, onUpdateBook }: BookDetailPro
                     </span>
                     <span aria-hidden="true" className="text-[#CFC7B9]">·</span>
                     <span className="text-[#8C8275]">
-                      {new Date(page.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                      {formatDisplayDate(page.created_at)}
                     </span>
                   </div>
 

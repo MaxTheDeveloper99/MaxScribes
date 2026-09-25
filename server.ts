@@ -3,7 +3,30 @@ import path from "path";
 import fs from "fs";
 import { Pool } from "pg";
 import multer from "multer";
-import { cleanTranscribedText } from "./src/utils/textCleaner";
+
+function cleanTranscribedText(raw: string): string {
+  if (!raw) return "";
+  let text = raw;
+  text = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  text = text.replace(/(\b\d+)<sup>\s*([0-9]+(?:-[0-9]+)?)\s*<\/sup>/gi, "$1:$2");
+  text = text.replace(/(\b\d+)\s*\$?\^\{?\s*([0-9]+(?:-[0-9]+)?)\s*\}?\$?/g, "$1:$2");
+  text = text.replace(/<sup>\s*(.*?)\s*<\/sup>/gi, "$1");
+  text = text.replace(/<sub>\s*(.*?)\s*<\/sub>/gi, "$1");
+  text = text.replace(/<u>\s*(.*?)\s*<\/u>/gi, "$1");
+  text = text.replace(/\$\^\{?([^\}]+)\}?\$/g, "$1");
+  text = text.replace(/\$([^\$\n]+)\$/g, "$1");
+  text = text.replace(/<br\s*\/?>/gi, "\n");
+  text = text.replace(/<\/?[a-zA-Z][^>]*>/g, "");
+  text = text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ");
+  text = text.replace(/[\u200B-\u200D\uFEFF]/g, "");
+  return text.trim();
+}
 
 // PostgreSQL connection pool
 const connectionString = (process.env.DATABASE_URL || "").trim();
@@ -293,7 +316,9 @@ const upload = multer({
 });
 
 // API Routes
-app.post("/api/transcribe", async (req, res) => {
+const apiRouter = express.Router();
+
+apiRouter.post("/transcribe", async (req, res) => {
   const { imageBase64, mimeType } = req.body;
   if (!imageBase64) {
     return res.status(400).json({ error: "Missing imageBase64 in request body." });
@@ -381,7 +406,7 @@ CRITICAL INSTRUCTIONS:
     });
   }
 });
-app.get("/api/books", async (req, res) => {
+apiRouter.get("/books", async (req, res) => {
   try {
     const books = await dbGetBooks();
     res.json(books);
@@ -390,17 +415,21 @@ app.get("/api/books", async (req, res) => {
   }
 });
 
-app.post("/api/books", async (req, res) => {
-  const { title, author, due_date } = req.body;
+apiRouter.post("/books", async (req, res) => {
+  const { title, author, status, due_date } = req.body;
   try {
     const book = await dbCreateBook(title, author, due_date);
+    if (status && status !== 'active') {
+      await dbUpdateBook(String(book.id), status);
+      book.status = status;
+    }
     res.json(book);
   } catch (err: any) {
     res.status(500).json({ error: `Failed to create book: ${err.message}` });
   }
 });
 
-app.patch("/api/books/:id", async (req, res) => {
+apiRouter.patch("/books/:id", async (req, res) => {
   const { status, due_date } = req.body;
   try {
     await dbUpdateBook(req.params.id, status, due_date);
@@ -410,7 +439,7 @@ app.patch("/api/books/:id", async (req, res) => {
   }
 });
 
-app.delete("/api/books/:id", async (req, res) => {
+apiRouter.delete("/books/:id", async (req, res) => {
   try {
     await dbDeleteBook(req.params.id);
     res.json({ success: true });
@@ -419,7 +448,7 @@ app.delete("/api/books/:id", async (req, res) => {
   }
 });
 
-app.get("/api/books/:id/pages", async (req, res) => {
+apiRouter.get("/books/:id/pages", async (req, res) => {
   try {
     const pages = await dbGetPages(req.params.id);
     res.json(pages);
@@ -428,7 +457,7 @@ app.get("/api/books/:id/pages", async (req, res) => {
   }
 });
 
-app.post("/api/books/:id/pages", upload.single("image"), async (req, res) => {
+apiRouter.post("/books/:id/pages", upload.single("image"), async (req, res) => {
   const { page_number, content } = req.body;
   const book_id = req.params.id;
   
@@ -448,7 +477,7 @@ app.post("/api/books/:id/pages", upload.single("image"), async (req, res) => {
   }
 });
 
-app.patch("/api/pages/:id", async (req, res) => {
+apiRouter.patch("/pages/:id", async (req, res) => {
   const { content, page_number } = req.body;
   try {
     const cleanedContent = content !== undefined ? cleanTranscribedText(content) : undefined;
@@ -459,7 +488,7 @@ app.patch("/api/pages/:id", async (req, res) => {
   }
 });
 
-app.delete("/api/pages/:id", async (req, res) => {
+apiRouter.delete("/pages/:id", async (req, res) => {
   try {
     await dbDeletePage(req.params.id);
     res.json({ success: true });
@@ -467,6 +496,10 @@ app.delete("/api/pages/:id", async (req, res) => {
     res.status(500).json({ error: `Failed to delete page: ${err.message}` });
   }
 });
+
+// Mount router on both /api prefix and root for full Vercel serverless rewrite compatibility
+app.use("/api", apiRouter);
+app.use(apiRouter);
 
 // Serve uploaded images
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
