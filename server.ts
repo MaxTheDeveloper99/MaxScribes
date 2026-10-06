@@ -497,8 +497,9 @@ apiRouter.delete("/pages/:id", async (req, res) => {
   }
 });
 
-// Mount router on both /api prefix and root for full Vercel serverless rewrite compatibility
+// Mount router on /api, /api/api fallback, and root for full Vercel serverless rewrite compatibility
 app.use("/api", apiRouter);
+app.use("/api/api", apiRouter);
 app.use(apiRouter);
 
 // Serve uploaded images

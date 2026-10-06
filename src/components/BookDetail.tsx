@@ -4,7 +4,7 @@ import api from '../services/api';
 import { Book, Page } from '../types';
 import { useDropzone } from 'react-dropzone';
 import { extractTextFromImage, parsePageNumber, sleep } from '../services/gemini';
-import { optimizeImageForOcr } from '../utils/imageOptimizer';
+import { optimizeImageForOcr, preloadAndOptimizeAllFiles, PreparedImage } from '../utils/imageOptimizer';
 import { 
   Upload, 
   FileText, 
@@ -34,6 +34,7 @@ interface BookDetailProps {
 
 interface FailedFileItem {
   file: File;
+  prepared?: PreparedImage;
   error: string;
 }
 
@@ -96,7 +97,7 @@ export default function BookDetail({ book, onBack, onUpdateBook }: BookDetailPro
 
   const updatePageMutation = useMutation({
     mutationFn: async ({ id, content }: { id: number; content: string }) => {
-      await api.patch(`/api/pages/${id}`, { content });
+      await api.patch(`/pages/${id}`, { content });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pages', book.id] });
@@ -109,7 +110,7 @@ export default function BookDetail({ book, onBack, onUpdateBook }: BookDetailPro
 
   const deletePageMutation = useMutation({
     mutationFn: async (id: number) => {
-      await api.delete(`/api/pages/${id}`);
+      await api.delete(`/pages/${id}`);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pages', book.id] });
@@ -145,8 +146,8 @@ export default function BookDetail({ book, onBack, onUpdateBook }: BookDetailPro
     };
   }, [pages]);
 
-  const processFiles = useCallback(async (filesToProcess: File[]) => {
-    if (!filesToProcess || filesToProcess.length === 0) return;
+  const processFiles = useCallback(async (itemsToProcess: Array<File | PreparedImage>) => {
+    if (!itemsToProcess || itemsToProcess.length === 0) return;
 
     setIsUploading(true);
     setNotification(null);
@@ -155,20 +156,57 @@ export default function BookDetail({ book, onBack, onUpdateBook }: BookDetailPro
 
     let nextPageNumber = pages?.length ? Math.max(...pages.map(p => p.page_number)) + 1 : 1;
 
-    for (let i = 0; i < filesToProcess.length; i++) {
-      const file = filesToProcess[i];
+    // Check for items that are already preloaded in memory vs raw files
+    const rawFiles: File[] = [];
+    const preloadedItems: PreparedImage[] = [];
+
+    for (const item of itemsToProcess) {
+      if ('base64Data' in item && item.base64Data) {
+        preloadedItems.push(item);
+      } else if ('originalFile' in item) {
+        rawFiles.push(item.originalFile);
+      } else {
+        rawFiles.push(item as File);
+      }
+    }
+
+    let preparedImages: PreparedImage[] = [...preloadedItems];
+
+    if (rawFiles.length > 0) {
+      // STAGE 1: Immediate Ingestion & Optimization
+      // Read and compress all images into memory immediately so mobile OS file descriptors never expire
+      setUploadStatus(`Securing and optimizing ${rawFiles.length} images...`);
       setUploadProgress({
-        current: i + 1,
-        total: filesToProcess.length,
-        fileName: file.name,
+        current: 0,
+        total: rawFiles.length,
+        fileName: 'Reading images into memory...',
       });
 
-      try {
-        setUploadStatus(`Preparing ${file.name}...`);
-        const { base64Data, mimeType, optimizedFile } = await optimizeImageForOcr(file, 1600);
+      const newPrepared = await preloadAndOptimizeAllFiles(rawFiles, (current, total, fileName) => {
+        setUploadProgress({ current, total, fileName });
+        setUploadStatus(`Securing image ${current} of ${total}: ${fileName}`);
+      });
 
-        setUploadStatus(`Transcribing ${file.name}...`);
-        const text = await extractTextFromImage(base64Data, mimeType, (statusUpdate) => {
+      preparedImages = [...preparedImages, ...newPrepared];
+    }
+
+    // STAGE 2: Sequential OCR & Save from in-memory buffers
+    for (let i = 0; i < preparedImages.length; i++) {
+      const item = preparedImages[i];
+      setUploadProgress({
+        current: i + 1,
+        total: preparedImages.length,
+        fileName: item.originalFile.name,
+      });
+
+      if (item.error || !item.base64Data) {
+        currentFailed.push({ file: item.originalFile, prepared: item, error: item.error || 'Failed to read image data' });
+        continue;
+      }
+
+      try {
+        setUploadStatus(`Transcribing ${item.originalFile.name}...`);
+        const text = await extractTextFromImage(item.base64Data, item.mimeType, (statusUpdate) => {
           setUploadStatus(statusUpdate);
         });
 
@@ -180,7 +218,7 @@ export default function BookDetail({ book, onBack, onUpdateBook }: BookDetailPro
 
         setUploadStatus(`Saving Page ${finalPageNumber}...`);
         await uploadPageMutation.mutateAsync({
-          file: optimizedFile,
+          file: item.optimizedFile,
           content: finalText,
           pageNumber: finalPageNumber,
         });
@@ -188,11 +226,11 @@ export default function BookDetail({ book, onBack, onUpdateBook }: BookDetailPro
         successCount++;
         setUploadStatus(`Saved Page ${finalPageNumber}`);
 
-        if (i < filesToProcess.length - 1) {
+        if (i < preparedImages.length - 1) {
           await sleep(2500);
         }
       } catch (error: any) {
-        console.error(`Error processing file ${file.name}:`, error);
+        console.error(`Error processing file ${item.originalFile.name}:`, error);
         let errorMsg = error.response?.data?.error || error.message || "Processing error";
         
         const isTransient =
@@ -204,15 +242,15 @@ export default function BookDetail({ book, onBack, onUpdateBook }: BookDetailPro
 
         if (isTransient) {
           errorMsg = "Service busy. Pausing before next retry...";
-          if (i < filesToProcess.length - 1) {
-            setUploadStatus(`Service limit reached on ${file.name}. Waiting 15s...`);
+          if (i < preparedImages.length - 1) {
+            setUploadStatus(`Service limit reached on ${item.originalFile.name}. Waiting 15s...`);
             await sleep(15000);
           }
-        } else if (i < filesToProcess.length - 1) {
-          await sleep(4000);
+        } else if (i < preparedImages.length - 1) {
+          await sleep(3000);
         }
 
-        currentFailed.push({ file, error: errorMsg });
+        currentFailed.push({ file: item.originalFile, prepared: item, error: errorMsg });
       }
     }
 
@@ -229,7 +267,7 @@ export default function BookDetail({ book, onBack, onUpdateBook }: BookDetailPro
     } else if (successCount > 0) {
       setNotification({
         type: 'warning',
-        message: `Added ${successCount} of ${filesToProcess.length} pages. ${currentFailed.length} could not be completed.`,
+        message: `Added ${successCount} of ${itemsToProcess.length} pages. ${currentFailed.length} could not be completed.`,
       });
     } else {
       setNotification({
@@ -247,9 +285,9 @@ export default function BookDetail({ book, onBack, onUpdateBook }: BookDetailPro
   }, [processFiles]);
 
   const retryFailedFiles = () => {
-    const filesToRetry = failedFiles.map(f => f.file);
+    const itemsToRetry = failedFiles.map(f => (f.prepared && f.prepared.base64Data ? f.prepared : f.file));
     setFailedFiles([]);
-    processFiles(filesToRetry);
+    processFiles(itemsToRetry);
   };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
