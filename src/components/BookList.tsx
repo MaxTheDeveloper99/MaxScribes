@@ -15,6 +15,7 @@ export default function BookList({ onSelectBook }: BookListProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'completed' | 'on-hold'>('all');
   const [newBook, setNewBook] = useState({ title: '', author: '', status: 'active' });
+  const [bookToDelete, setBookToDelete] = useState<{ id: number; title: string } | null>(null);
 
   const { data: books, isLoading, error } = useQuery<Book[]>({
     queryKey: ['books'],
@@ -357,9 +358,7 @@ export default function BookList({ onSelectBook }: BookListProps) {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (confirm(`Delete project "${book.title}"?`)) {
-                        deleteBookMutation.mutate(book.id);
-                      }
+                      setBookToDelete({ id: book.id, title: book.title });
                     }}
                     className="p-1 text-[#B0A799] hover:text-rose-700 transition-colors cursor-pointer"
                     title="Delete project"
@@ -420,6 +419,55 @@ export default function BookList({ onSelectBook }: BookListProps) {
           )}
         </div>
       )}
+
+      {/* Delete Project Confirmation Modal */}
+      <AnimatePresence>
+        {bookToDelete && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 bg-[#1C1917]/60 backdrop-blur-xs flex items-center justify-center p-4"
+            onClick={(e) => {
+              e.stopPropagation();
+              setBookToDelete(null);
+            }}
+          >
+            <div
+              className="bg-white border border-[#E7E2D8] rounded-lg max-w-sm w-full p-6 shadow-xl space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="font-serif text-lg font-bold text-[#1C1917]">
+                Delete "{bookToDelete.title}"?
+              </h3>
+              <p className="text-xs text-[#6E6659] leading-relaxed">
+                Are you sure you want to delete this project? All digitized pages in this project will be permanently removed.
+              </p>
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#F0EBE1]">
+                <button
+                  type="button"
+                  onClick={() => setBookToDelete(null)}
+                  className="px-3 py-1.5 text-xs text-[#6E6659] hover:text-[#1C1917] cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={deleteBookMutation.isPending}
+                  onClick={() => {
+                    const id = bookToDelete.id;
+                    setBookToDelete(null);
+                    deleteBookMutation.mutate(id);
+                  }}
+                  className="px-4 py-1.5 bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white text-xs font-medium rounded-md cursor-pointer transition-colors"
+                >
+                  {deleteBookMutation.isPending ? 'Deleting...' : 'Delete Project'}
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

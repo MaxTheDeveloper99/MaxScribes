@@ -46,6 +46,7 @@ export default function BookDetail({ book, onBack, onUpdateBook }: BookDetailPro
   const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number; fileName: string } | null>(null);
   const [failedFiles, setFailedFiles] = useState<FailedFileItem[]>([]);
   const [notification, setNotification] = useState<{ type: 'success' | 'warning' | 'error'; message: string } | null>(null);
+  const [pageToDelete, setPageToDelete] = useState<{ id: number; pageNumber: number } | null>(null);
 
   const updateBookStatusMutation = useMutation({
     mutationFn: async (newStatus: string) => {
@@ -114,9 +115,16 @@ export default function BookDetail({ book, onBack, onUpdateBook }: BookDetailPro
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pages', book.id] });
+      setNotification({
+        type: 'success',
+        message: 'Page deleted successfully.',
+      });
     },
     onError: (err: any) => {
-      alert(`Could not delete page: ${err.message}`);
+      setNotification({
+        type: 'error',
+        message: `Could not delete page: ${err.message}`,
+      });
     }
   });
 
@@ -652,11 +660,7 @@ export default function BookDetail({ book, onBack, onUpdateBook }: BookDetailPro
                     </button>
 
                     <button
-                      onClick={() => {
-                        if (confirm(`Delete Page ${page.page_number}?`)) {
-                          deletePageMutation.mutate(page.id);
-                        }
-                      }}
+                      onClick={() => setPageToDelete({ id: page.id, pageNumber: page.page_number })}
                       className="p-1.5 text-[#B0A799] hover:text-rose-700 transition-colors cursor-pointer"
                       title="Delete page"
                       aria-label="Delete page"
@@ -809,6 +813,52 @@ export default function BookDetail({ book, onBack, onUpdateBook }: BookDetailPro
                   className="max-w-full max-h-full object-contain"
                   referrerPolicy="no-referrer"
                 />
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete Page Confirmation Modal */}
+      <AnimatePresence>
+        {pageToDelete && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 bg-[#1C1917]/60 backdrop-blur-xs flex items-center justify-center p-4"
+            onClick={() => setPageToDelete(null)}
+          >
+            <div
+              className="bg-white border border-[#E7E2D8] rounded-lg max-w-sm w-full p-6 shadow-xl space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="font-serif text-lg font-bold text-[#1C1917]">
+                Delete Page {pageToDelete.pageNumber}?
+              </h3>
+              <p className="text-xs text-[#6E6659] leading-relaxed">
+                Are you sure you want to delete Page {pageToDelete.pageNumber}? The transcription and page scan will be permanently removed.
+              </p>
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#F0EBE1]">
+                <button
+                  type="button"
+                  onClick={() => setPageToDelete(null)}
+                  className="px-3 py-1.5 text-xs text-[#6E6659] hover:text-[#1C1917] cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={deletePageMutation.isPending}
+                  onClick={() => {
+                    const id = pageToDelete.id;
+                    setPageToDelete(null);
+                    deletePageMutation.mutate(id);
+                  }}
+                  className="px-4 py-1.5 bg-rose-700 hover:bg-rose-800 disabled:opacity-50 text-white text-xs font-medium rounded-md cursor-pointer transition-colors"
+                >
+                  {deletePageMutation.isPending ? 'Deleting...' : 'Delete Page'}
+                </button>
               </div>
             </div>
           </motion.div>
