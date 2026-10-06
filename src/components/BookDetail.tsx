@@ -212,9 +212,8 @@ export default function BookDetail({ book, onBack, onUpdateBook }: BookDetailPro
 
         const rawText = text && text.trim() ? text.trim() : "[No legible text detected on this page]";
         const finalText = cleanTranscribedText(rawText);
-        const detectedPageNumberFromText = parsePageNumber(finalText);
-        const finalPageNumber = detectedPageNumberFromText !== null ? detectedPageNumberFromText : nextPageNumber;
-        nextPageNumber = Math.max(nextPageNumber, finalPageNumber + 1);
+        const finalPageNumber = nextPageNumber;
+        nextPageNumber += 1;
 
         setUploadStatus(`Saving Page ${finalPageNumber}...`);
         await uploadPageMutation.mutateAsync({
@@ -278,10 +277,8 @@ export default function BookDetail({ book, onBack, onUpdateBook }: BookDetailPro
   }, [book.id, pages, uploadPageMutation]);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
-    const sorted = [...acceptedFiles].sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
-    );
-    processFiles(sorted);
+    // Preserve the exact selection order in which you picked the files
+    processFiles(acceptedFiles);
   }, [processFiles]);
 
   const retryFailedFiles = () => {
